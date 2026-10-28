@@ -36,6 +36,7 @@
 
 local Memory          = require("infra/sui_memory")
 local T               = require("ffi/util").template
+local util            = require("util")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local Geom            = require("ui/geometry")
 local GestureRange    = require("ui/gesturerange")
@@ -869,6 +870,9 @@ function GridRenderer.build(w, ctx, opts)
         end
 
         local cell = VerticalGroup:new{ align = "center", cover_widget }
+        -- Width of the drawn cover: the slot minus its shadow inset. Bar and
+        -- label are centred on it, left-aligned in the cw-wide slot.
+        local card_w = math.max(1, cw - SUIStyle.coverShadowOffset(SUIStyle.SHADOW_MODULES))
 
         -- Captured below (when applicable) and merged into a single
         -- row_update_funcs[i] closure after this cell's elements are
@@ -881,16 +885,15 @@ function GridRenderer.build(w, ctx, opts)
             -- Wrapped in a single-slot OverlapGroup so a later refresh can
             -- just replace bar_container[1] with a freshly-built progress
             -- bar instead of rebuilding this whole cell.
-            local _bar_w = cw
             local _bar_h = D.RB_BAR_H
-            local _init_bar = UI.progressBar(_bar_w, bd.percent, _bar_h, ink.bar_fg, ink.bar_bg)
+            local _init_bar = UI.progressBar(card_w, bd.percent, _bar_h, ink.bar_fg, ink.bar_bg)
             local bar_container = OverlapGroup:new{
-                dimen = _init_bar:getSize(),
+                dimen = Geom:new{ w = cw, h = _init_bar:getSize().h },
                 _init_bar,
             }
             cell[#cell+1] = bar_container
             _update_bar = function(nd)
-                bar_container[1] = UI.progressBar(_bar_w, (nd and nd.percent or 0), _bar_h, ink.bar_fg, ink.bar_bg)
+                bar_container[1] = UI.progressBar(card_w, (nd and nd.percent or 0), _bar_h, ink.bar_fg, ink.bar_bg)
             end
         end
 
@@ -903,11 +906,14 @@ function GridRenderer.build(w, ctx, opts)
                 face      = pct_face,
                 bold      = pct_bold,
                 fgcolor   = _pct_fg,
-                max_width = cw,
+                max_width = card_w,
                 truncate_with_ellipsis = true,
                 alignment = "center",
             }
-            cell[#cell+1] = pct_w
+            cell[#cell+1] = OverlapGroup:new{
+                dimen = Geom:new{ w = cw, h = label_h },
+                CenterContainer:new{ dimen = Geom:new{ w = card_w, h = label_h }, pct_w },
+            }
             _update_text = function(nd)
                 UI.updateColoredText(pct_w,
                     opts.labelForItem and opts.labelForItem(nd)
@@ -1365,7 +1371,7 @@ function GridRenderer.listAllCollectionNames(exclude_names)
     end
     local others = {}
     for name in pairs(coll_set) do others[#others + 1] = name end
-    table.sort(others, function(a, b) return a:lower() < b:lower() end)
+    table.sort(others, function(a, b) return util.stringLower(a) < util.stringLower(b) end)
     for _, n in ipairs(others) do all[#all + 1] = n end
     return all
 end
@@ -1454,7 +1460,7 @@ function GridRenderer.sortCollection(coll_name, mode)
     local SH = getSH()
     if mode == "title_asc" or mode == "title_desc" then
         local titles = {}
-        for _, fp in ipairs(fps) do titles[fp] = GridRenderer.getBookTitle(fp):lower() end
+        for _, fp in ipairs(fps) do titles[fp] = util.stringLower(GridRenderer.getBookTitle(fp)) end
         table.sort(fps, function(a, b)
             if mode == "title_asc" then return titles[a] < titles[b] else return titles[a] > titles[b] end
         end)
@@ -1462,7 +1468,7 @@ function GridRenderer.sortCollection(coll_name, mode)
         local authors = {}
         for _, fp in ipairs(fps) do
             local bd = SH.getBookData(fp)
-            authors[fp] = (bd.authors or ""):lower()
+            authors[fp] = util.stringLower(bd.authors or "")
         end
         table.sort(fps, function(a, b) return authors[a] < authors[b] end)
     elseif mode == "percent_asc" or mode == "percent_desc" then
@@ -1704,6 +1710,7 @@ function GridRenderer.makeModule(spec)
     local M = {}
     M.id          = id
     M.name        = spec.name or id
+    M.category    = spec.category
     M.label       = spec.label
     M.enabled_key = spec.enabled_key or (id .. "_enabled")
     M.default_on  = spec.default_on or false

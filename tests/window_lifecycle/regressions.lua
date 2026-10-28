@@ -273,5 +273,87 @@ test('300 repeated settings open/close cycles leave no wrappers or singleton',fu
     for i=1,300 do local w=Settings:show(); assert(w:close()); tick() end
     assert(#Window._open_instances==0 and #UIManager._window_stack==0 and Settings._instance==nil)
 end)
+
+test('official 3.0.1 toast overlay does not block outside-tap dismissal',function()
+    local w=window()
+    local toast=Class:new{toast=true}
+    UIManager:show(toast)
+    assert(UIManager._window_stack[#UIManager._window_stack].widget==toast)
+    w:getWidget():onTapOutside(nil,{pos={intersectWith=function() return false end}})
+    tick()
+    assert(not w:isOpen() and not w:_isWrapperShown())
+    assert(UIManager._window_stack[1].widget==toast)
+end)
+
+local Bento=assert(loadfile(root..'/infra/sui_bento.lua'))()
+test('official 3.0.1 stacked grid keeps equal-width modules in balanced columns',function()
+    local ids={'a','b','c','d'}; local spans={a=3,b=3,c=3,d=3}
+    local plain=Bento.packFor(ids,spans,{stack=false})
+    local stacked=Bento.packFor(ids,spans,{stack=true})
+    assert(#plain==2 and #stacked==1 and #stacked[1].cols==2)
+    assert(table.concat(stacked[1].cols[1].ids,',')=='a,c')
+    assert(table.concat(stacked[1].cols[2].ids,',')=='b,d')
+    assert(table.concat(ids,',')=='a,b,c,d' and spans.a==3)
+end)
+test('official 3.0.1 free-width grid preserves percentages while stacking',function()
+    local rows=Bento.packFor({'a','b','c'},{a=35,b=65,c=35},{classic=true})
+    assert(#rows==1 and rows[1].of==100 and rows[1].sum==100)
+    assert(rows[1].cols[1].span==35 and rows[1].cols[2].span==65)
+    assert(table.concat(rows[1].cols[1].ids,',')=='a,c')
+end)
+test('official 3.0.1 full-width modules retain a separate row in both layouts',function()
+    for _,mode in ipairs({{stack=true},{classic=true}}) do
+        local widths=mode.classic and {a=50,b=50,full=100,c=50,d=50}
+            or {a=3,b=3,full=6,c=3,d=3}
+        local rows=Bento.packFor({'a','b','full','c','d'},widths,mode)
+        assert(#rows==3 and #rows[2].cols==1 and rows[2].ids[1]=='full')
+    end
+end)
+
+-- Keep drawing stubbed while exercising the actual 3.0.1 category builders
+-- and the repaired singleton/explicit editor navigation in the same session.
+local function pickerFixture()
+    local Registry=package.loaded['modules/moduleregistry']
+    local Layout=package.loaded['infra/sui_layout']
+    local definitions={{id='book',name='Book'},{id='clock',name='Clock'}}
+    Registry.list=function() return definitions end
+    Registry.isInstance=function() return false end
+    Registry.getCategory=function(id) return id=='book' and 'books' or 'extras' end
+    Registry.getCategories=function() return {{key='books',title='Books'},{key='extras',title='Extras'}} end
+    Registry.getInstanciableBaseIds=function() return {'actions'} end
+    Registry.getBase=function() return {name='Actions'} end
+    Registry.createInstance=function() return 'actions_1' end
+    Layout.entryId=function(v) return v end
+    local saved=0
+    Layout.save=function() saved=saved+1 end
+    local old_row=Window.ListRow; Window.ListRow=function(opts) return opts end
+    local layout={pages={{modules={}}}}
+    local w=Settings:show(nil,{{id='page_edit'},{id='module_picker'}},{layout=layout,current_page=1})
+    local ctx={inner_w=600,current=function() return w:_navCurrent() end,
+        push=function(id,p) w:push(id,p) end,pop=function(opts) w:pop(opts) end}
+    local function rows() return w._screens.module_picker(ctx) end
+    local function restore() Window.ListRow=old_row end
+    return w,rows,layout,function() return saved end,restore
+end
+test('official category picker survives Settings reuse and adds a singleton module',function()
+    local w,rows,layout,saved,restore=pickerFixture()
+    assert(Settings:show()==w and #Window._open_instances==1)
+    local categories=rows(); assert(#categories==2 and categories[1].title=='Books')
+    categories[1].on_tap()
+    local books=rows(); assert(#books==1 and books[1].title=='Book')
+    books[1].on_tap()
+    assert(layout.pages[1].modules[1]=='book' and saved()==1)
+    assert(w:_navCurrent().id=='page_edit' and #w._nav_stack==2)
+    restore()
+end)
+test('official category picker retains instantiable modules and two-level return',function()
+    local w,rows,layout,saved,restore=pickerFixture()
+    rows()[2].on_tap()
+    local extras=rows(); assert(#extras==2 and extras[2].title=='Actions')
+    extras[2].on_tap()
+    assert(layout.pages[1].modules[1]=='actions_1' and saved()==1)
+    assert(w:_navCurrent().id=='page_edit' and #w._nav_stack==2)
+    restore()
+end)
 reset()
 print('RESULT '..passed..' regression tests passed ('..(jit and jit.version or _VERSION)..')')

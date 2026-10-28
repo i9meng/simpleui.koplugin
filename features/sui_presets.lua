@@ -69,7 +69,7 @@ local HS_EXACT = {
     ["simpleui_titlebar_tone"]                = true,
     ["simpleui_titlebar_show_frame"]          = true,
     ["simpleui_module_backdrop"]              = true,
-    ["simpleui_wallpaper_show_in_fm"]         = true,  -- "show wallpaper in file manager" toggle
+    ["simpleui_library_backdrop"]             = true,
     ["simpleui_reading_goals_show_annual"]    = true,
     ["simpleui_reading_goals_show_monthly"]   = true,
     ["simpleui_reading_goals_show_daily"]     = true,
@@ -1154,6 +1154,7 @@ return {
 
     -- Homescreen preset menu items (shared between sui_menu and sui_layout_editor)
     makeMenuItems = SUIPresets.makeMenuItems,
+    buildListRows = SUIPresets.buildListRows,
     icons = SUIIconPresets,
 
     -- Shared name prompt for any preset store (see promptName)

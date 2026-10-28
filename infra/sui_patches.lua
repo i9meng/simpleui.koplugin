@@ -2112,7 +2112,7 @@ end
 local function _displaceScreen(ctx)
     local widget, plugin = ctx.widget, ctx.plugin
     local engine = package.loaded["engines/sui_screen_engine"]
-    local keep_parked = engine and engine.SOFT_PARK_ENABLED and engine.KEEP_PARKED_ACROSS_SUSPEND
+    local keep_parked = engine and engine.isSoftParkEnabled() and engine.KEEP_PARKED_ACROSS_SUSPEND
     local stack = UI.getWindowStack()
     for i, entry in ipairs(stack) do
         local screen = entry.widget
@@ -2242,8 +2242,8 @@ local function _closedScreenExposesWidget(widget)
 end
 
 local function _refreshExposedWidget()
-    local stack = UI.getWindowStack()
-    local top = stack[#stack] and stack[#stack].widget
+    local top = UI.getTopWindow()
+    top = top and top.widget
     if top and top ~= liveFM() and top.covers_fullscreen and not _isReader(top) then
         UIManager:setDirty(top, "ui")
     end
@@ -2382,8 +2382,8 @@ end
 -- A foreign fullscreen widget can leave its pixels on a panel that the
 -- non-flashing refresh of the reopened screen does not clear: flash it once.
 local function _clearExposedGhosting()
-    local stack = UI.getWindowStack()
-    local top = stack[#stack] and stack[#stack].widget
+    local top = UI.getTopWindow()
+    top = top and top.widget
     if top and top.name == "homescreen" then
         UIManager:setDirty(nil, "flashui")
     end
@@ -4394,10 +4394,13 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Paint the wallpaper onto bb, anchored at y=0 (top of screen), with its tint.
+-- The library scrim covers the content area only, between the bars.
 local function _paintWallpaper(bg_widget, bb, x, y)
     if not bg_widget then return end
-    bg_widget:paintTo(bb, x, 0)
-    SUIWallpaper.paintTint(bb, x, 0, Screen:getWidth(), Screen:getHeight())
+    SUIWallpaper.paintBackground(bb, x)
+    local top = UI.getTopInset()
+    SUIWallpaper.paintLibraryScrim(bb, x, top, Screen:getWidth(),
+        Screen:getHeight() - top - Bottombar.TOTAL_H())
 end
 
 -- Returns the wallpaper background widget when the file manager wallpaper is

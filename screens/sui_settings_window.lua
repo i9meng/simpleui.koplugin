@@ -518,17 +518,20 @@ local function buildScreens(st)
         local page = st.layout.pages[st.current_page]
         if not page then return {} end
         local ids, spans = LayoutService.pageSpans(page, st.pfx)
+        local mode       = LayoutService.mode(st.pfx)
 
         return SUI.BentoMap{
             inner_w     = ctx.inner_w,
-            rows        = Bento.pack(ids, spans),
+            rows        = Bento.packFor(ids, spans, mode),
             spans       = spans,
+            row_total   = mode.classic and Bento.CLASSIC_MAX or Bento.ROW,
             label_for   = LayoutService.getModuleName,
             span_label  = function(span)
+                if mode.classic then return span .. "%" end
                 return span == Bento.FULL and _("Full Width") or Config.bentoSpanLabel(span)
             end,
             summary_for = function(mod_id) return Registry.getSummary(mod_id, st.pfx, st.pfx_qa) end,
-            can_move    = function(mod_id) return Bento.canMove(ids, spans, mod_id) end,
+            can_move    = function(mod_id) return Bento.canMove(ids, spans, mod_id, mode) end,
             on_move     = function(mod_id, dir)
                 LayoutService.move(st.layout, st.pfx, mod_id, dir)
                 saveAndRepaint(ctx)
@@ -541,31 +544,37 @@ local function buildScreens(st)
                     mod_id     = mod_id,
                     pfx        = st.pfx,
                     layout     = st.layout,
-                    subtitle   = Registry.getSummary(mod_id, st.pfx, st.pfx_qa),
+                    subtitle_for = function(id) return Registry.getSummary(id, st.pfx, st.pfx_qa) end,
                     on_changed = function() ctx.repaint() end,
-                    rows       = {
-                        {
-                            text = _("Module settings"), sui_icon = "settings", chevron = true,
-                            callback = function()
-                                st.current_module_id = mod_id
-                                ctx.push("module_settings")
-                            end,
-                        },
-                        {
-                            text = _("Move to page"), sui_icon = "move_page", chevron = true,
-                            callback = function() moveModuleToPage(ctx, mod_id) end,
-                        },
-                    },
+                    rows       = function(id)
+                        return {
+                            {
+                                text = _("Settings"), sui_icon = "settings", chevron = true,
+                                callback = function()
+                                    st.current_module_id = id
+                                    ctx.push("module_settings")
+                                end,
+                            },
+                            {
+                                text = _("To Page"), sui_icon = "move_page", chevron = true,
+                                callback = function() moveModuleToPage(ctx, id) end,
+                            },
+                        }
+                    end,
                 }
             end,
         }
     end
 
     -- ── 2.5. Module Picker ───────────────────────────────────────────────────
+    -- Two levels: the categories that still have something to add, then the
+    -- modules of the chosen category (params.category).
     local function buildModulePicker(ctx)
         local iw         = ctx.inner_w
         local items      = {}
         local active_set = {}
+        local cur        = ctx.current()
+        local chosen     = cur and cur.params and cur.params.category
 
         for _, page in ipairs(st.layout.pages) do
             for _, m in ipairs(page.modules) do
@@ -574,39 +583,58 @@ local function buildScreens(st)
             end
         end
 
-        -- Singleton modules: show only those not yet in the layout,
-        -- and skip instances of instanciable modules.
+        -- Candidates by category: singleton modules not yet in the layout
+        -- (instances are skipped) and, always, one "Add" entry per instanciable
+        -- module.
+        local by_cat = {}
+        local function addEntry(mod_id, title, on_tap)
+            local cat = Registry.getCategory(mod_id)
+            by_cat[cat] = by_cat[cat] or {}
+            table.insert(by_cat[cat], { title = title, on_tap = on_tap })
+        end
+
         for _, mod in ipairs(Registry.list()) do
             if not active_set[mod.id] and not Registry.isInstance(mod.id) then
                 local _mod_id = mod.id
-                table.insert(items, SUI.ListRow{
-                    title   = mod.name,
-                    inner_w = iw,
-                    on_tap  = function()
-                        table.insert(st.layout.pages[st.current_page].modules, _mod_id)
-                        LayoutService.save(st.layout, st.pfx, st.layout_key, st.screen_id)
-                        ctx.pop()
-                    end,
-                })
+                addEntry(_mod_id, mod.name, function()
+                    table.insert(st.layout.pages[st.current_page].modules, _mod_id)
+                    LayoutService.save(st.layout, st.pfx, st.layout_key, st.screen_id)
+                    ctx.pop{ levels = 2 }
+                end)
             end
         end
 
-        -- Instanciable modules: always show an "Add" entry regardless of
-        -- how many instances already exist in the layout.
         for _i, base_id in ipairs(Registry.getInstanciableBaseIds()) do
             local base_mod = Registry.getBase(base_id)
-            table.insert(items, SUI.ListRow{
-                title    = (base_mod and base_mod.name) or base_id,
-                inner_w  = iw,
-                on_tap   = function()
-                    local new_id = Registry.createInstance(base_id)
-                    if new_id then
-                        table.insert(st.layout.pages[st.current_page].modules, new_id)
-                        LayoutService.save(st.layout, st.pfx, st.layout_key, st.screen_id)
+            addEntry(base_id, (base_mod and base_mod.name) or base_id, function()
+                local new_id = Registry.createInstance(base_id)
+                if new_id then
+                    table.insert(st.layout.pages[st.current_page].modules, new_id)
+                    LayoutService.save(st.layout, st.pfx, st.layout_key, st.screen_id)
+                end
+                ctx.pop{ levels = 2 }
+            end)
+        end
+
+        for _i, cat in ipairs(Registry.getCategories()) do
+            local entries = by_cat[cat.key]
+            if entries and chosen then
+                if cat.key == chosen then
+                    for _j, e in ipairs(entries) do
+                        table.insert(items, SUI.ListRow{ title = e.title, inner_w = iw, on_tap = e.on_tap })
                     end
-                    ctx.pop()
-                end,
-            })
+                end
+            elseif entries then
+                local _cat = cat
+                table.insert(items, SUI.ListRow{
+                    title        = cat.title,
+                    inner_w      = iw,
+                    show_chevron = true,
+                    on_tap       = function()
+                        ctx.push("module_picker", { category = _cat.key, title = _cat.title })
+                    end,
+                })
+            end
         end
 
         if #items == 0 then
@@ -873,7 +901,10 @@ local function makeScreenTitles(st)
             return st.screen_id == "hs" and _("Layout Editor")
                 or (st.screen_name or _("Layout Editor"))
         end,
-        module_picker          = _("Add Module"),
+        module_picker = function(ctx)
+            local cur = ctx.current()
+            return cur and cur.params and cur.params.title or _("Add Module")
+        end,
         item_picker = function(ctx)
             local cur = ctx.current()
             return cur and cur.params and cur.params.title or _("Add Item")

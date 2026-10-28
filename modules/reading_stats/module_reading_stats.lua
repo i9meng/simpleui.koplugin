@@ -599,7 +599,7 @@ local function ensureData(ctx, ids, mode)
         if not ctx[set.field] and set.uses(ids, mode) then
             SP = SP or require("modules/module_stats_provider")
             ctx[set.field] = set.fetch(SP, ctx)
-            ctx[set.flag]  = true
+            if ctx[set.field] then ctx[set.flag] = true end
         end
     end
     if not ctx._needs_books and anyIn(ids, BOOK_STAT_IDS) then
@@ -1797,6 +1797,7 @@ end
 local M = {}
 M.id            = BASE_ID
 M.name          = _("Reading Stats")
+M.category      = "stats"
 M.instanciable  = true
 M.bare_instance = true   -- BASE_ID is itself the first instance
 M.instances_key = "simpleui_reading_stats_instances"
