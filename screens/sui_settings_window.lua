@@ -915,6 +915,22 @@ end
 --- `state` optionally seeds the editing context, for a `nav_path` that skips the
 --- screens which would otherwise set it.
 function SettingsWindow:show(on_close, nav_path, state)
+    local existing = self._instance
+    if existing and existing:isOpen() then
+        if not nav_path and not state then
+            if on_close then
+                table.insert(existing._settings_close_callbacks, on_close)
+            end
+            return existing
+        end
+        -- An explicit editor destination replaces the current settings session.
+        if existing:close() == false then return existing end
+    end
+    if UIManager._simpleui_exiting or UIManager._exit_code ~= nil then
+        if on_close then on_close() end
+        return
+    end
+
     local st = {
         layout            = LayoutService.load(),
         layout_loaded_key = "simpleui_layout",
@@ -932,14 +948,17 @@ function SettingsWindow:show(on_close, nav_path, state)
     }
     for key, value in pairs(state or {}) do st[key] = value end
 
+    local win
+    local close_callbacks = on_close and { on_close } or {}
     local wrapped_on_close = function()
-        if on_close then on_close() end
+        if self._instance == win then self._instance = nil end
+        for _, callback in ipairs(close_callbacks) do pcall(callback) end
     end
 
     local screens = buildScreens(st)
     local titles  = makeScreenTitles(st)
 
-    local win = SUI:new{
+    win = SUI:new{
         name           = "sui_win_settings",
         icon           = "settings",
         screens        = screens,
@@ -1014,7 +1033,14 @@ function SettingsWindow:show(on_close, nav_path, state)
         },
     }
 
-    win:show()
+    win._settings_close_callbacks = close_callbacks
+    self._instance = win
+    local ok, err = pcall(win.show, win)
+    if not ok then
+        win:close()
+        error(err, 0)
+    end
+    return win
 end
 
 --- Opens the page editor of the page that holds `mod_id` on the screen with

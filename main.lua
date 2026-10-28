@@ -1450,8 +1450,14 @@ end
 -- Mark exit early so HS reopen paths bail before _exit_code is set (that
 -- only happens once the window stack is empty). Force-close soft-parked
 -- screens so they cannot keep the stack non-empty and block quit.
+local function closeSimpleUIWindows()
+    local windows = package.loaded["engines/sui_window"]
+    if windows then windows.closeAll{ force = true } end
+end
+
 function SimpleUIPlugin:onExit()
     UIManager._simpleui_exiting = true
+    closeSimpleUIWindows()
     local ScreenEngine = package.loaded["engines/sui_screen_engine"]
     if ScreenEngine then
         for _, id in ipairs(ScreenEngine.liveScreenIds()) do
@@ -1468,10 +1474,12 @@ end
 
 function SimpleUIPlugin:onRestart()
     UIManager._simpleui_exiting = true
+    closeSimpleUIWindows()
     return false
 end
 
 function SimpleUIPlugin:onCloseWidget()
+    closeSimpleUIWindows()
     local ScreenEngine = package.loaded["engines/sui_screen_engine"]
     if not ScreenEngine then return end
     local exiting = UIManager._simpleui_exiting or UIManager._exit_code ~= nil
@@ -1505,6 +1513,8 @@ local function _removeFileDialogButton(id, FM, FS)
 end
 
 function SimpleUIPlugin:onTeardown()
+    -- Window callbacks need the current modules, before unloadModules below.
+    closeSimpleUIWindows()
     -- Flush the plugin settings store so any in-memory writes are persisted
     -- before the plugin is unloaded or KOReader exits.
     SUISettings:flush()

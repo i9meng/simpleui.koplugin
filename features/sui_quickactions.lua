@@ -537,20 +537,23 @@ end
 -- bar indicator while the sheet is open — that is a legitimate navbar
 -- operation, not action logic.
 local function _showPowerDialog(plugin)
-    if plugin._power_dialog then return end
+    -- A stale overlay can outlive FileManager/ReaderUI. Power actions must
+    -- still work when there is no live plugin to own the tab indicator.
+    local owner = plugin or QA
+    if owner._power_dialog then return end
     local ActionSheet = require("engines/sui_action_sheet")
-    local prev_action = plugin.active_action
+    local prev_action = plugin and plugin.active_action
     local BB          = _Bottombar()
 
-    BB.setTempTabActive(plugin, "power", true, prev_action)
+    if plugin then BB.setTempTabActive(plugin, "power", true, prev_action) end
 
     -- When true, the tab is not restored (process is ending via Exit/Restart).
     local _leaving = false
     -- Runs once, however the sheet closes (tap outside, Back key, an item).
     local function _onClose()
-        if not plugin._power_dialog then return end
-        plugin._power_dialog = nil
-        if _leaving then return end
+        if not owner._power_dialog then return end
+        owner._power_dialog = nil
+        if _leaving or not plugin then return end
         BB.setTempTabActive(plugin, "power", false, prev_action)
     end
 
@@ -561,20 +564,42 @@ local function _showPowerDialog(plugin)
         if leaving then
             UIManager._simpleui_exiting = true
         end
-        local sheet = plugin._power_dialog
-        if sheet then sheet:close() end
+        local sheet = owner._power_dialog
+        if sheet and sheet:close() == false then
+            _leaving = false
+            if leaving then UIManager._simpleui_exiting = nil end
+            return false
+        end
+        return true
     end
 
     -- Close and fully paint away the sheet first, then show the sticky notice
     -- on the next tick so the two never overlap. Exit/Restart run one tick
     -- later, after the notice has been painted.
     local function _leaveWithNotice(text, event_name)
-        _dismiss(true)
+        if not _dismiss(true) then return end
         UIManager:forceRePaint()
         UIManager:nextTick(function()
             UI.Notify.sticky(text)
             UIManager:nextTick(function()
-                UIManager:broadcastEvent(Event:new(event_name))
+                local fm = _liveFM()
+                local RUI = package.loaded["apps/reader/readerui"]
+                local reader = RUI and RUI.instance
+                if fm or reader then
+                    -- Exit gets an explicit completion callback: it must not
+                    -- depend on every unrelated overlay emptying the stack.
+                    local finish = function() UIManager:quit() end
+                    UIManager:broadcastEvent(Event:new(event_name, finish))
+                else
+                    -- Recovery path: no DeviceListener is left to receive
+                    -- the event, but settings should still be flushed.
+                    UIManager:flushSettings()
+                    if event_name == "Restart" then
+                        UIManager:restartKOReader()
+                    else
+                        UIManager:quit()
+                    end
+                end
             end)
         end)
     end
@@ -589,14 +614,14 @@ local function _showPowerDialog(plugin)
     if Device:canReboot() then
         items[#items + 1] = { text = _("Reboot"), sui_icon = "power", callback = function()
             -- Confirm dialog may cancel; restore the tab, then ask.
-            _dismiss(false)
+            if not _dismiss(false) then return end
             require("features/dialogs/sui_dialogs").askReboot()
         end }
     end
     if Device:canSuspend() then
         items[#items + 1] = { text = _("Sleep"), sui_icon = "sleep", callback = function()
             -- Session continues after wakeup — restore the tab, then suspend.
-            _dismiss(false)
+            if not _dismiss(false) then return end
             UIManager:flushSettings()
             UIManager:suspend()
         end }
@@ -607,7 +632,7 @@ local function _showPowerDialog(plugin)
         _leaveWithNotice(_("Quitting…"), "Exit")
     end }
 
-    plugin._power_dialog = ActionSheet.show{
+    owner._power_dialog = ActionSheet.show{
         name      = "sui_win_power",
         fit_width = true,
         on_close  = _onClose,
@@ -982,6 +1007,7 @@ local function _registerBuiltins()
             label = _("Settings"),
             icon  = Config.ICON.ko_settings,
             is_in_place = true,
+            is_async_in_place = true,
             execute = function(ctx)
                 local plugin = ctx.plugin or _simpleui_plugin()
                 QA.trackIndicatorViaCallback(plugin, "sui_settings", function(restore)

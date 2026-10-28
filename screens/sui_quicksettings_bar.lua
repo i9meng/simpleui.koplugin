@@ -288,7 +288,7 @@ local function runAction(touch_menu, action_id)
     local is_in_place = _QA().isInPlace(action_id)
     local stay_open   = is_in_place
         and not action_id:match("^custom_qa_%d+$")
-        and action_id ~= "sui_win_settings"
+        and action_id ~= "sui_settings"
 
     local fm, _reader, plugin = liveInstances()
 

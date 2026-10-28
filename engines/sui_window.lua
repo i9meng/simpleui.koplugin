@@ -444,6 +444,8 @@ end
 function SUIWindow:show()
     _sui_scale = self._scale
     self._closed = nil
+    self._closing = nil
+    self._dismiss_notified = nil
     self._modal_frame = FrameContainer:new{
         radius         = SZ(Size.radius.window),
         bordersize     = SUIStyle.BORDER_SZ,
@@ -540,11 +542,20 @@ function SUIWindow:show()
     do
         local win = self
         function self._wrapper:onCloseWidget()
-            local region = win:_modalRegion()
-            if region then
-                UIManager:setDirty(nil, function() return "ui", region end)
+            local ok, region = pcall(win._modalRegion, win)
+            if not ok then
+                logger.warn("SUIWindow: close region failed:", tostring(region))
+                region = nil
             end
-            if not win._closed then win:close() end
+            UIManager:setDirty(nil, "ui", region)
+            -- KOReader sends CloseWidget before removing the wrapper. Never
+            -- call close() recursively from that event. An external close
+            -- finalizes only after the wrapper has actually left the stack.
+            if not win._closing and not win._closed then
+                UIManager:nextTick(function()
+                    if not win:_isWrapperShown() then win:_finishClose() end
+                end)
+            end
         end
     end
 
@@ -811,30 +822,71 @@ end
 
 --- Closes the window and returns to whatever opened it (see opts.on_back).
 function SUIWindow:_goBack()
-    self:close()
+    if self:close() == false then return end
     if self._on_back then self._on_back() end
 end
 
 --- Closes the window as the user dismissing it: runs `on_dismiss`, then closes.
 function SUIWindow:dismiss()
-    if self._closed or not self._dismissable then return end
-    if self._on_dismiss then pcall(self._on_dismiss) end
-    self:close()
+    if self._closed or self._closing or not self._dismissable then return end
+    if not self._dismiss_notified then
+        self._dismiss_notified = true
+        if self._on_dismiss then pcall(self._on_dismiss) end
+    end
+    return self:close()
 end
 
---- Closes every open window that can be dismissed, topmost first.
-function SUIWindow.closeAll()
-    local instances = SUIWindow._open_instances
+--- Closes open windows topmost first; force also closes non-dismissable ones.
+function SUIWindow.closeAll(opts)
+    -- Close callbacks may open/close other windows. Iterate a snapshot so a
+    -- failure or a mutation cannot skip an older window.
+    local instances = {}
+    for i, window in ipairs(SUIWindow._open_instances) do instances[i] = window end
+    local all_closed = true
     for i = #instances, 1, -1 do
         local window = instances[i]
-        if window and window._dismissable then window:close() end
+        if window and (window._dismissable or (opts and opts.force)) then
+            local ok, closed = pcall(window.close, window)
+            if not ok or closed == false then
+                all_closed = false
+                logger.warn("SUIWindow: closeAll could not close", window._name, tostring(closed))
+            end
+        end
     end
+    return all_closed
+end
+
+function SUIWindow:_isWrapperShown()
+    if not self._wrapper then return false end
+    for _, entry in ipairs(UIManager._window_stack or {}) do
+        if entry.widget == self._wrapper then return true end
+    end
+    return false
 end
 
 --- Closes the window.
 function SUIWindow:close()
+    if self._closed then return true end
+    if self._closing then return false end
+    self._closing = true
+    local ok, err = true, nil
+    if self._wrapper then ok, err = pcall(UIManager.close, UIManager, self._wrapper) end
+    self._closing = nil
+    if self:_isWrapperShown() then
+        -- Keep the registry entry and callbacks intact so the user can retry.
+        logger.warn("SUIWindow: wrapper still open after close:", self._name, tostring(err))
+        return false, err
+    end
+    if not ok then logger.warn("SUIWindow: close finished with an error:", tostring(err)) end
+    self:_finishClose()
+    return true
+end
+
+-- Called only once the wrapper is off the UIManager stack.
+function SUIWindow:_finishClose()
     if self._closed then return end
     self._closed = true
+    if self._wrapper then self._wrapper._sui_window_instance = nil end
     -- Remove from open-instances tracking.
     local instances = SUIWindow._open_instances
     for i = #instances, 1, -1 do
@@ -849,10 +901,7 @@ function SUIWindow:close()
     if self._on_close then
         pcall(self._on_close)
     end
-    if self._wrapper then
-        UIManager:close(self._wrapper)
-        self._wrapper._sui_window_instance = nil  -- clear marker
-    end
+    if UIManager._simpleui_exiting or UIManager._exit_code ~= nil then return end
 
     -- Force a full paint of any underlying homescreen. The automatic
     -- lower-widget refresh after close honours widget.dithered and can
